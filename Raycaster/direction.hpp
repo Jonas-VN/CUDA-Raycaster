@@ -1,6 +1,5 @@
 #pragma once
 #include <cmath>
-#include <iostream>
 
 struct Direction {
     double x;

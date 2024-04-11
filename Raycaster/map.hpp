@@ -1,7 +1,6 @@
 #pragma once
 #include "coordinate.hpp"
 #include "settings.hpp"
-#include <iostream>
 
 class Map {
 private:
