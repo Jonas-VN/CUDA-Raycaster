@@ -18,6 +18,10 @@ struct Direction {
         return x * other->x + y * other->y;
     }
 
+    double dotProduct(const Direction other) const {
+        return x * other.x + y * other.y;
+    }
+
     void normalize() {
         double magnitude = sqrt(x * x + y * y);
         if (magnitude != 0.0) {

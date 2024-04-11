@@ -1,10 +1,10 @@
 #pragma once
 #include <cmath>
 
-#define USE_GPU false
+#define USE_GPU true
 
-#define SCREEN_WIDTH 1200
-#define SCREEN_HEIGHT 800
+#define SCREEN_WIDTH 1600
+#define SCREEN_HEIGHT 1000
 
 #define DEG2RAD 3.14159265358979323846 / 180
 #define POV 90
