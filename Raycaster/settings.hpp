@@ -1,8 +1,8 @@
 #pragma once
 #include <cmath>
 
-#define USE_GPU true
-#define USE_TEXTURE true
+#define USE_GPU false
+#define USE_TEXTURE false
 
 #define SCREEN_WIDTH 1600
 #define SCREEN_HEIGHT 1000

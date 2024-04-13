@@ -23,7 +23,11 @@ SDL_Surface* gSurface = nullptr;
 
 
 #if USE_GPU
-__global__ void GPU_Raycast(Uint32* pixels, Direction* playerDirection, Coordinate* playerCoordinate, Direction* cameraDirection, double cameraDistance) {
+#if USE_TEXTURE
+__global__ void GPU_Raycast(Uint32* pixels, Direction* playerDirection, Coordinate* playerCoordinate, Direction* cameraDirection, double cameraDistance, cudaTextureObject_t tex) {
+#else
+__global__ void GPU_Raycast(Uint32 * pixels, Direction * playerDirection, Coordinate * playerCoordinate, Direction * cameraDirection, double cameraDistance) {
+#endif
     int column = blockIdx.x * blockDim.x + threadIdx.x;
     double factor;
     if (column < SCREEN_WIDTH) {
@@ -109,11 +113,30 @@ __global__ void GPU_Raycast(Uint32* pixels, Direction* playerDirection, Coordina
         }
 
         double length = 1 / distanceToWall * SCREEN_HEIGHT;
-        int start = (SCREEN_HEIGHT - length) / 2 >= 0 ? (int)(SCREEN_HEIGHT - length) / 2 : 0;
-        int end = start + length <= SCREEN_HEIGHT ? (int)start + length : SCREEN_HEIGHT;
-        for (int y = start; y < end; ++y) {
+        int start = (SCREEN_HEIGHT - length) / 2;
+        int end = start + length;
+
+        int realStart = start >= 0 ? start : 0;
+        int realEnd = end <= SCREEN_HEIGHT ? end : SCREEN_HEIGHT;
+
+#if USE_TEXTURE
+        int textureX;
+        if (hitDirection == 0) textureX = (int)((intersection.x - std::floor(intersection.x)) * TEXTURE_WIDTH);
+        else textureX = (int)((intersection.y - std::floor(intersection.y)) * TEXTURE_WIDTH);
+        double ratio = (double)TEXTURE_HEIGHT / (end - start);
+        double textureY = start >= 0 ? 0.0 : -start;
+
+        for (int y = realStart; y < realEnd; ++y) {
+            int sourceY = (int)(textureY * ratio);
+            pixels[y * SCREEN_WIDTH + column] = tex1Dfetch<Uint32>(tex, sourceY * TEXTURE_WIDTH + textureX);
+            textureY++;
+        }
+
+#else
+        for (int y = realStart; y < realEnd; ++y) {
             pixels[y * SCREEN_WIDTH + column] = 0xFF0000 - hitDirection * 0x330000;
         }
+#endif
     }
 }
 #else
@@ -224,7 +247,7 @@ void CPU_Raycast(Uint32* pixels, Player* player, const Map* map) {
 
 #else
         for (int y = realStart; y < realEnd; ++y) {
-            pixels[y * SCREEN_WIDTH + column] = = 0xFF0000 - hitDirection * 0x330000;
+            pixels[y * SCREEN_WIDTH + column] = 0xFF0000 - hitDirection * 0x330000;
         }
 #endif
     }
@@ -344,6 +367,27 @@ int main(int argc, char* args[]) {
     map->copyMapToGPU();
     int blockSize = 256;
     int numBlocks = (SCREEN_WIDTH + blockSize - 1) / blockSize;
+
+#if USE_TEXTURE
+    Uint32* textureData;
+    cudaMalloc((void**)&textureData, TEXTURE_HEIGHT * TEXTURE_WIDTH * sizeof(Uint32));
+    cudaMemcpy(textureData, gTexture, TEXTURE_HEIGHT * TEXTURE_WIDTH * sizeof(Uint32), cudaMemcpyHostToDevice);
+
+    cudaResourceDesc resDesc;
+    memset(&resDesc, 0, sizeof(resDesc));
+    resDesc.resType = cudaResourceTypeLinear;
+    resDesc.res.linear.devPtr = textureData;
+    resDesc.res.linear.desc.x = 32; // bits per channel
+    resDesc.res.linear.sizeInBytes = TEXTURE_HEIGHT * TEXTURE_WIDTH * sizeof(Uint32);
+
+    cudaTextureDesc texDesc;
+    memset(&texDesc, 0, sizeof(texDesc));
+    texDesc.readMode = cudaReadModeElementType;
+
+    cudaTextureObject_t tex = 0;
+    cudaCreateTextureObject(&tex, &resDesc, &texDesc, NULL);
+#endif
+
 #endif
 
     double currentTime = (double) SDL_GetTicks64();
@@ -363,7 +407,11 @@ int main(int argc, char* args[]) {
             cudaMemcpy(gpuPlayerDirection, player->direction, sizeof(Direction), cudaMemcpyHostToDevice);
             cudaMemcpy(gpuPlayerCoordinate, player->coordinate, sizeof(Coordinate), cudaMemcpyHostToDevice);
             cudaMemcpy(gpuCameraDirection, player->camera->direction, sizeof(Direction), cudaMemcpyHostToDevice);
+#if USE_TEXTURE
+            GPU_Raycast << <numBlocks, blockSize >> > (gpuPixels, gpuPlayerDirection, gpuPlayerCoordinate, gpuCameraDirection, player->camera->distanceToPlayer, tex);
+#else
             GPU_Raycast << <numBlocks, blockSize >> > (gpuPixels, gpuPlayerDirection, gpuPlayerCoordinate, gpuCameraDirection, player->camera->distanceToPlayer);
+#endif
             quit = handle_keys(delta, player);
             cudaDeviceSynchronize();
             cudaMemcpy(pixels, gpuPixels, SCREEN_HEIGHT * SCREEN_WIDTH * sizeof(Uint32), cudaMemcpyDeviceToHost);
@@ -394,6 +442,3 @@ int main(int argc, char* args[]) {
 #endif
     return 0;
 }
-
-
-
