@@ -5,12 +5,23 @@
 #include "map.hpp"
 #include <iostream>
 #include <string>
+
+#if USE_GPU
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
+#endif
+
+#if USE_TEXTURE
+#include <SDL_image.h>
+
+Uint32* gTexture = nullptr;
+#endif
 
 
 SDL_Window* gWindow = nullptr;
 SDL_Surface* gSurface = nullptr;
+int frame = 0;
+bool test = false;
 
 
 #if USE_GPU
@@ -95,6 +106,7 @@ __global__ void GPU_Raycast(Uint32* pixels, double playerDirectionX, double play
 void CPU_Raycast(Uint32* pixels, Player* player, const Map* map) {
     double factor;
     for (int column = 0; column < SCREEN_WIDTH; column++) {
+
         // Calculate ray direction
         factor = -1.0 + 2.0 * column / SCREEN_WIDTH;
         Direction rayDirection = Direction(
@@ -117,6 +129,7 @@ void CPU_Raycast(Uint32* pixels, Player* player, const Map* map) {
         if (rayDirection.y < 0) horizontalDistance = (player->coordinate->y - std::floor(player->coordinate->y)) * delta_h;
         else horizontalDistance = (std::ceil(player->coordinate->y) - player->coordinate->y) * delta_h;
 
+        Coordinate roundedIntersection;
         Coordinate intersection;
         int hitDirection = 0;
         double distanceToWall = 0.0;
@@ -124,19 +137,24 @@ void CPU_Raycast(Uint32* pixels, Player* player, const Map* map) {
         while (!hit) {
             if (verticalDistance + y * delta_v < horizontalDistance + x * delta_h) {
                 factor = verticalDistance + y * delta_v;
+                intersection = Coordinate(
+                    rayDirection.x * factor + player->coordinate->x,
+                    rayDirection.y * factor + player->coordinate->y
+                );
+
                 if (rayDirection.x < 0) {
-                    intersection = Coordinate(
-                        std::round(rayDirection.x * factor + player->coordinate->x) - 1.0,
-                        std::floor(rayDirection.y * factor + player->coordinate->y)
+                    roundedIntersection = Coordinate(
+                        std::round(intersection.x) - 1.0,
+                        std::floor(intersection.y)
                     );
                 }
                 else {
-                    intersection = Coordinate(
-                        std::round(rayDirection.x * factor + player->coordinate->x),
-                        std::floor(rayDirection.y * factor + player->coordinate->y)
+                    roundedIntersection = Coordinate(
+                        std::round(intersection.x),
+                        std::floor(intersection.y)
                     );
                 }
-                if (map->isWall(&intersection)) {
+                if (map->isWall(&roundedIntersection)) {
                     hit = true;
                     distanceToWall = factor * rayDirection.dotProduct(player->direction);
                     hitDirection = 1;
@@ -145,20 +163,24 @@ void CPU_Raycast(Uint32* pixels, Player* player, const Map* map) {
             }
             else {
                 factor = horizontalDistance + x * delta_h;
+                intersection = Coordinate(
+                    rayDirection.x * factor + player->coordinate->x,
+                    rayDirection.y * factor + player->coordinate->y
+                );
                 if (rayDirection.y < 0) {
-                    intersection = Coordinate(
-                        std::floor(rayDirection.x * factor + player->coordinate->x),
-                        std::round(rayDirection.y * factor + player->coordinate->y) - 1.0
+                    roundedIntersection = Coordinate(
+                        std::floor(intersection.x),
+                        std::round(intersection.y) - 1.0
                     );
                 }
                 else {
-                    intersection = Coordinate(
-                        std::floor(rayDirection.x * factor + player->coordinate->x),
-                        std::round(rayDirection.y * factor + player->coordinate->y)
+                    roundedIntersection = Coordinate(
+                        std::floor(intersection.x),
+                        std::round(intersection.y)
                     );
                 }
 
-                if (map->isWall(&intersection)) {
+                if (map->isWall(&roundedIntersection)) {
                     hit = true;
                     distanceToWall = factor * rayDirection.dotProduct(player->direction);
                 }
@@ -167,12 +189,30 @@ void CPU_Raycast(Uint32* pixels, Player* player, const Map* map) {
         }
 
         double length = 1 / distanceToWall * SCREEN_HEIGHT;
-        int start = (SCREEN_HEIGHT - length) / 2 >= 0 ? (int)(SCREEN_HEIGHT - length) / 2 : 0;
-        int end = start + length <= SCREEN_HEIGHT ? (int)start + length : SCREEN_HEIGHT;
+        int start = (SCREEN_HEIGHT - length) / 2;
+        int end = start + length;
 
-        for (int y = start; y < end; ++y) {
+        int realStart = start >= 0 ? start : 0;
+        int realEnd = end <= SCREEN_HEIGHT ? end : SCREEN_HEIGHT;
+
+#if USE_TEXTURE
+        int textureX;
+        if (hitDirection == 0) textureX = (int) ((intersection.x - std::floor(intersection.x)) * TEXTURE_WIDTH);
+        else textureX = (int) ((intersection.y - std::floor(intersection.y)) * TEXTURE_WIDTH);
+        double ratio = (double) TEXTURE_HEIGHT / (end - start);
+        double textureY = start >= 0 ? 0.0 : -start;
+
+        for (int y = realStart; y < realEnd; ++y) {
+            int sourceY = (int) (textureY * ratio);
+            pixels[y * SCREEN_WIDTH + column] = gTexture[sourceY * TEXTURE_WIDTH + textureX];
+            textureY++;
+        }
+
+#else
+        for (int y = realStart; y < realEnd; ++y) {
             pixels[y * SCREEN_WIDTH + column] = SDL_MapRGB(gSurface->format, 255 - hitDirection * 100, 0, 0);
         }
+#endif
     }
 }
 #endif
@@ -184,6 +224,27 @@ bool initSDL() {
         printf("SDL could not initialize! SDL_Error: %s\n", SDL_GetError());
         return false;
     }
+
+#if USE_TEXTURE
+    // Initialize SDL_image
+    int imgFlags = IMG_INIT_PNG;
+    if ((IMG_Init(imgFlags) & imgFlags) != imgFlags) {
+        std::cerr << "SDL_image initialization failed: " << IMG_GetError() << std::endl;
+        SDL_Quit();
+        return false;
+    }
+
+    // Load image
+    SDL_Surface* surface = IMG_Load("src/wall.png");
+    surface = SDL_ConvertSurfaceFormat(surface, SDL_PIXELFORMAT_RGBA32, 0);
+    if (!surface) {
+        std::cerr << "Failed to load image: " << IMG_GetError() << std::endl;
+        IMG_Quit();
+        SDL_Quit();
+        return -1;
+    }
+    gTexture = static_cast<Uint32*>(surface->pixels);
+#endif
 
     // Create window
     gWindow = SDL_CreateWindow("Raycaster (FPS: )", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, SCREEN_WIDTH, SCREEN_HEIGHT, SDL_WINDOW_SHOWN);
@@ -203,6 +264,11 @@ void closeSDL() {
     // Destroy window
     SDL_DestroyWindow(gWindow);
     gWindow = nullptr;
+
+#if USE_TEXTURE
+    // Quit SDL_image
+    IMG_Quit();
+#endif
 
     // Quit SDL subsystems
     SDL_Quit();
@@ -261,16 +327,17 @@ int main(int argc, char* args[]) {
     std::cout << numBlocks << std::endl;
 #endif
 
-    double currentTime = SDL_GetTicks64();
+    double currentTime = (double) SDL_GetTicks64();
     double prevTime = currentTime;
     bool quit = false;
     while (!quit) {
-        currentTime = SDL_GetTicks64();
-        double delta = (currentTime - prevTime) / 1000;
+        currentTime = (double) SDL_GetTicks64();
+        double delta = (currentTime - prevTime) / 1000.0;
         prevTime = currentTime;
-        int fps = (int) 1 / delta;
+        int fps = (int) (1 / delta);
 
         if (SDL_LockSurface(gSurface) == 0) {
+            if (frame++ % 200 == 0) test = !test;
             Uint32* pixels = (Uint32*)gSurface->pixels;
 
 #if USE_GPU
@@ -282,6 +349,21 @@ int main(int argc, char* args[]) {
 #else
             memset(pixels, 0x000000, SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(Uint32));
             CPU_Raycast(pixels, player, map);
+            double ratio = 0.4;
+            int newWidth = TEXTURE_WIDTH / ratio;
+            int newHeight = TEXTURE_HEIGHT / ratio;
+
+            for (int y = 0; y < newHeight; ++y) {
+                for (int x = 0; x < newWidth; ++x) {
+                    int sourceX = (int) (x * ratio);
+                    int sourceY = (int) (y * ratio);
+
+                    // Copy pixel value from original image to resized image
+                    //pixels[y * SCREEN_WIDTH + x] = gTexture[sourceY * TEXTURE_WIDTH + sourceX];
+                }
+            }
+
+
             quit = handle_keys(delta, player);
 #endif
 

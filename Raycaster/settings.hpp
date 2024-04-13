@@ -1,10 +1,14 @@
 #pragma once
 #include <cmath>
 
-#define USE_GPU true
+#define USE_GPU false
+#define USE_TEXTURE true
 
 #define SCREEN_WIDTH 1600
 #define SCREEN_HEIGHT 1000
+
+#define TEXTURE_WIDTH 360
+#define TEXTURE_HEIGHT 360
 
 #define DEG2RAD 3.14159265358979323846 / 180
 #define POV 90
