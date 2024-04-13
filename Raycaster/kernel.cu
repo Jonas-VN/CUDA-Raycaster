@@ -20,8 +20,6 @@ Uint32* gTexture = nullptr;
 
 SDL_Window* gWindow = nullptr;
 SDL_Surface* gSurface = nullptr;
-int frame = 0;
-bool test = false;
 
 
 #if USE_GPU
@@ -337,7 +335,6 @@ int main(int argc, char* args[]) {
         int fps = (int) (1 / delta);
 
         if (SDL_LockSurface(gSurface) == 0) {
-            if (frame++ % 200 == 0) test = !test;
             Uint32* pixels = (Uint32*)gSurface->pixels;
 
 #if USE_GPU
@@ -349,21 +346,6 @@ int main(int argc, char* args[]) {
 #else
             memset(pixels, 0x000000, SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(Uint32));
             CPU_Raycast(pixels, player, map);
-            double ratio = 0.4;
-            int newWidth = TEXTURE_WIDTH / ratio;
-            int newHeight = TEXTURE_HEIGHT / ratio;
-
-            for (int y = 0; y < newHeight; ++y) {
-                for (int x = 0; x < newWidth; ++x) {
-                    int sourceX = (int) (x * ratio);
-                    int sourceY = (int) (y * ratio);
-
-                    // Copy pixel value from original image to resized image
-                    //pixels[y * SCREEN_WIDTH + x] = gTexture[sourceY * TEXTURE_WIDTH + sourceX];
-                }
-            }
-
-
             quit = handle_keys(delta, player);
 #endif
 
