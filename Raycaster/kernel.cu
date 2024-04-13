@@ -23,70 +23,86 @@ SDL_Surface* gSurface = nullptr;
 
 
 #if USE_GPU
-__global__ void GPU_Raycast(Uint32* pixels, double playerDirectionX, double playerDirectionY, double playerCoordinateX, double playerCoordinateY, double cameraDirectionX, double cameraDirectionY, double cameraDistance) {
+__global__ void GPU_Raycast(Uint32* pixels, Direction* playerDirection, Coordinate* playerCoordinate, Direction* cameraDirection, double cameraDistance) {
     int column = blockIdx.x * blockDim.x + threadIdx.x;
+    double factor;
     if (column < SCREEN_WIDTH) {
         // Calculate ray direction
-        double factor = -1.0 + 2.0 * column / SCREEN_WIDTH;
-        double rayDirectionX = cameraDistance * playerDirectionX + factor * cameraDirectionX;
-        double rayDirectionY = cameraDistance * playerDirectionY + factor * cameraDirectionY;
-        double magnitude = sqrt(rayDirectionX * rayDirectionX + rayDirectionY * rayDirectionY);
-        if (magnitude != 0) {
-            rayDirectionX /= magnitude;
-            rayDirectionY /= magnitude;
-        }
+        factor = -1.0 + 2.0 * column / SCREEN_WIDTH;
+        Direction rayDirection = Direction(
+            cameraDistance * playerDirection->x + factor * cameraDirection->x,
+            cameraDistance * playerDirection->y + factor * cameraDirection->y
+        );
+        rayDirection.normalize();
 
         // Raycast
         int x = 0;
         int y = 0;
-        double delta_v = abs(1 / rayDirectionX);
-        double delta_h = abs(1 / rayDirectionY);
+        double delta_v = abs(1 / rayDirection.x);
+        double delta_h = abs(1 / rayDirection.y);
 
         double verticalDistance;
-        if (rayDirectionX < 0) verticalDistance = (playerCoordinateX - floor(playerCoordinateX)) * delta_v;
-        else verticalDistance = (ceil(playerCoordinateX) - playerCoordinateX) * delta_v;
+        if (rayDirection.x < 0) verticalDistance = (playerCoordinate->x - floor(playerCoordinate->x)) * delta_v;
+        else verticalDistance = (ceil(playerCoordinate->x) - playerCoordinate->x) * delta_v;
 
         double horizontalDistance;
-        if (rayDirectionY < 0) horizontalDistance = (playerCoordinateY - floor(playerCoordinateY)) * delta_h;
-        else horizontalDistance = (ceil(playerCoordinateY) - playerCoordinateY) * delta_h;
+        if (rayDirection.y < 0) horizontalDistance = (playerCoordinate->y - floor(playerCoordinate->y)) * delta_h;
+        else horizontalDistance = (ceil(playerCoordinate->y) - playerCoordinate->y) * delta_h;
 
-        double intersectionX;
-        double intersectionY;
+        Coordinate roundedIntersection;
+        Coordinate intersection;
         int hitDirection = 0;
         double distanceToWall = 0.0;
         bool hit = false;
         while (!hit) {
             if (verticalDistance + y * delta_v < horizontalDistance + x * delta_h) {
                 factor = verticalDistance + y * delta_v;
-                if (rayDirectionX < 0) {
-                    intersectionX = round(rayDirectionX * factor + playerCoordinateX) - 1.0;
-                    intersectionY = floor(rayDirectionY * factor + playerCoordinateY);
+                intersection = Coordinate(
+                    rayDirection.x * factor + playerCoordinate->x,
+                    rayDirection.y * factor + playerCoordinate->y
+                );
+
+                if (rayDirection.x < 0) {
+                    roundedIntersection = Coordinate(
+                        std::round(intersection.x) - 1.0,
+                        std::floor(intersection.y)
+                    );
                 }
                 else {
-                    intersectionX = round(rayDirectionX * factor + playerCoordinateX);
-                    intersectionY = floor(rayDirectionY * factor + playerCoordinateY);
+                    roundedIntersection = Coordinate(
+                        std::round(intersection.x),
+                        std::floor(intersection.y)
+                    );
                 }
-                if (d_map[(int) intersectionY][(int) intersectionX] == 1) {
+                if (d_map[(int) roundedIntersection.y][(int) roundedIntersection.x]) {
                     hit = true;
-                    distanceToWall = factor * (rayDirectionX * playerDirectionX + rayDirectionY * playerDirectionY);
+                    distanceToWall = factor * rayDirection.dotProduct(playerDirection);
                     hitDirection = 1;
                 }
                 y++;
             }
             else {
                 factor = horizontalDistance + x * delta_h;
-                if (rayDirectionY < 0) {
-                    intersectionX = floor(rayDirectionX * factor + playerCoordinateX);
-                    intersectionY = round(rayDirectionY * factor + playerCoordinateY) - 1.0;
+                intersection = Coordinate(
+                    rayDirection.x * factor + playerCoordinate->x,
+                    rayDirection.y * factor + playerCoordinate->y
+                );
+                if (rayDirection.y < 0) {
+                    roundedIntersection = Coordinate(
+                        std::floor(intersection.x),
+                        std::round(intersection.y) - 1.0
+                    );
                 }
                 else {
-                    intersectionX = floor(rayDirectionX * factor + playerCoordinateX);
-                    intersectionY = round(rayDirectionY * factor + playerCoordinateY);
+                    roundedIntersection = Coordinate(
+                        std::floor(intersection.x),
+                        std::round(intersection.y)
+                    );
                 }
 
-                if (d_map[(int)intersectionY][(int)intersectionX] == 1) {
+                if (d_map[(int)roundedIntersection.y][(int)roundedIntersection.x]) {
                     hit = true;
-                    distanceToWall = factor * (rayDirectionX * playerDirectionX + rayDirectionY * playerDirectionY);
+                    distanceToWall = factor * rayDirection.dotProduct(playerDirection);
                 }
                 x++;
             }
@@ -96,7 +112,7 @@ __global__ void GPU_Raycast(Uint32* pixels, double playerDirectionX, double play
         int start = (SCREEN_HEIGHT - length) / 2 >= 0 ? (int)(SCREEN_HEIGHT - length) / 2 : 0;
         int end = start + length <= SCREEN_HEIGHT ? (int)start + length : SCREEN_HEIGHT;
         for (int y = start; y < end; ++y) {
-            pixels[y * SCREEN_WIDTH + column] = hitDirection == 0 ? 0xFF0000 : 0xDD0000;
+            pixels[y * SCREEN_WIDTH + column] = 0xFF0000 - hitDirection * 0x330000;
         }
     }
 }
@@ -208,7 +224,7 @@ void CPU_Raycast(Uint32* pixels, Player* player, const Map* map) {
 
 #else
         for (int y = realStart; y < realEnd; ++y) {
-            pixels[y * SCREEN_WIDTH + column] = SDL_MapRGB(gSurface->format, 255 - hitDirection * 100, 0, 0);
+            pixels[y * SCREEN_WIDTH + column] = = 0xFF0000 - hitDirection * 0x330000;
         }
 #endif
     }
@@ -317,12 +333,17 @@ int main(int argc, char* args[]) {
     Player* player = new Player(map);
 
 #if USE_GPU
-    map->copyMapToGPU();
     Uint32* gpuPixels;
+    Direction* gpuPlayerDirection;
+    Coordinate* gpuPlayerCoordinate;
+    Direction* gpuCameraDirection;
     cudaMalloc((void**)&gpuPixels, SCREEN_HEIGHT * SCREEN_WIDTH * sizeof(Uint32));
+    cudaMalloc((void**)&gpuPlayerDirection, sizeof(Direction));
+    cudaMalloc((void**)&gpuPlayerCoordinate, sizeof(Coordinate));
+    cudaMalloc((void**)&gpuCameraDirection, sizeof(Direction));
+    map->copyMapToGPU();
     int blockSize = 256;
     int numBlocks = (SCREEN_WIDTH + blockSize - 1) / blockSize;
-    std::cout << numBlocks << std::endl;
 #endif
 
     double currentTime = (double) SDL_GetTicks64();
@@ -339,7 +360,10 @@ int main(int argc, char* args[]) {
 
 #if USE_GPU
             cudaMemset(gpuPixels, 0x000000, SCREEN_HEIGHT * SCREEN_WIDTH * sizeof(Uint32));
-            GPU_Raycast << <numBlocks, blockSize >> > (gpuPixels, player->direction->x, player->direction->y, player->coordinate->x, player->coordinate->y, player->camera->direction->x, player->camera->direction->y, player->camera->distanceToPlayer);
+            cudaMemcpy(gpuPlayerDirection, player->direction, sizeof(Direction), cudaMemcpyHostToDevice);
+            cudaMemcpy(gpuPlayerCoordinate, player->coordinate, sizeof(Coordinate), cudaMemcpyHostToDevice);
+            cudaMemcpy(gpuCameraDirection, player->camera->direction, sizeof(Direction), cudaMemcpyHostToDevice);
+            GPU_Raycast << <numBlocks, blockSize >> > (gpuPixels, gpuPlayerDirection, gpuPlayerCoordinate, gpuCameraDirection, player->camera->distanceToPlayer);
             quit = handle_keys(delta, player);
             cudaDeviceSynchronize();
             cudaMemcpy(pixels, gpuPixels, SCREEN_HEIGHT * SCREEN_WIDTH * sizeof(Uint32), cudaMemcpyDeviceToHost);
@@ -364,6 +388,9 @@ int main(int argc, char* args[]) {
 
 #if USE_GPU
     cudaFree(gpuPixels);
+    cudaFree(gpuPlayerDirection);
+    cudaFree(gpuPlayerCoordinate);
+    cudaFree(gpuCameraDirection);
 #endif
     return 0;
 }
