@@ -24,9 +24,9 @@ SDL_Surface* gSurface = nullptr;
 
 #if USE_GPU
 #if USE_TEXTURE
-__global__ void GPU_Raycast(Uint32* pixels, Direction* playerDirection, Coordinate* playerCoordinate, Direction* cameraDirection, double cameraDistance, cudaTextureObject_t tex) {
+__global__ void GPU_Raycast(Uint32* pixels, Player* player, cudaTextureObject_t tex) {
 #else
-__global__ void GPU_Raycast(Uint32 * pixels, Direction * playerDirection, Coordinate * playerCoordinate, Direction * cameraDirection, double cameraDistance) {
+__global__ void GPU_Raycast(Uint32 * pixels, Player* player) {
 #endif
     int column = blockIdx.x * blockDim.x + threadIdx.x;
     double factor;
@@ -34,8 +34,8 @@ __global__ void GPU_Raycast(Uint32 * pixels, Direction * playerDirection, Coordi
         // Calculate ray direction
         factor = -1.0 + 2.0 * column / SCREEN_WIDTH;
         Direction rayDirection = Direction(
-            cameraDistance * playerDirection->x + factor * cameraDirection->x,
-            cameraDistance * playerDirection->y + factor * cameraDirection->y
+            player->camera->distanceToPlayer * player->direction->x + factor * player->camera->direction->x,
+            player->camera->distanceToPlayer * player->direction->y + factor * player->camera->direction->y
         );
         rayDirection.normalize();
 
@@ -46,12 +46,12 @@ __global__ void GPU_Raycast(Uint32 * pixels, Direction * playerDirection, Coordi
         double delta_h = abs(1 / rayDirection.y);
 
         double verticalDistance;
-        if (rayDirection.x < 0) verticalDistance = (playerCoordinate->x - floor(playerCoordinate->x)) * delta_v;
-        else verticalDistance = (ceil(playerCoordinate->x) - playerCoordinate->x) * delta_v;
+        if (rayDirection.x < 0) verticalDistance = (player->coordinate->x - floor(player->coordinate->x)) * delta_v;
+        else verticalDistance = (ceil(player->coordinate->x) - player->coordinate->x) * delta_v;
 
         double horizontalDistance;
-        if (rayDirection.y < 0) horizontalDistance = (playerCoordinate->y - floor(playerCoordinate->y)) * delta_h;
-        else horizontalDistance = (ceil(playerCoordinate->y) - playerCoordinate->y) * delta_h;
+        if (rayDirection.y < 0) horizontalDistance = (player->coordinate->y - floor(player->coordinate->y)) * delta_h;
+        else horizontalDistance = (ceil(player->coordinate->y) - player->coordinate->y) * delta_h;
 
         Coordinate roundedIntersection;
         Coordinate intersection;
@@ -62,8 +62,8 @@ __global__ void GPU_Raycast(Uint32 * pixels, Direction * playerDirection, Coordi
             if (verticalDistance + y * delta_v < horizontalDistance + x * delta_h) {
                 factor = verticalDistance + y * delta_v;
                 intersection = Coordinate(
-                    rayDirection.x * factor + playerCoordinate->x,
-                    rayDirection.y * factor + playerCoordinate->y
+                    rayDirection.x * factor + player->coordinate->x,
+                    rayDirection.y * factor + player->coordinate->y
                 );
 
                 if (rayDirection.x < 0) {
@@ -80,7 +80,7 @@ __global__ void GPU_Raycast(Uint32 * pixels, Direction * playerDirection, Coordi
                 }
                 if (d_map[(int) roundedIntersection.y][(int) roundedIntersection.x]) {
                     hit = true;
-                    distanceToWall = factor * rayDirection.dotProduct(playerDirection);
+                    distanceToWall = factor * rayDirection.dotProduct(player->direction);
                     hitDirection = 1;
                 }
                 y++;
@@ -88,8 +88,8 @@ __global__ void GPU_Raycast(Uint32 * pixels, Direction * playerDirection, Coordi
             else {
                 factor = horizontalDistance + x * delta_h;
                 intersection = Coordinate(
-                    rayDirection.x * factor + playerCoordinate->x,
-                    rayDirection.y * factor + playerCoordinate->y
+                    rayDirection.x * factor + player->coordinate->x,
+                    rayDirection.y * factor + player->coordinate->y
                 );
                 if (rayDirection.y < 0) {
                     roundedIntersection = Coordinate(
@@ -104,9 +104,9 @@ __global__ void GPU_Raycast(Uint32 * pixels, Direction * playerDirection, Coordi
                     );
                 }
 
-                if (d_map[(int)roundedIntersection.y][(int)roundedIntersection.x]) {
+                if (d_map[(int) roundedIntersection.y][(int) roundedIntersection.x]) {
                     hit = true;
-                    distanceToWall = factor * rayDirection.dotProduct(playerDirection);
+                    distanceToWall = factor * rayDirection.dotProduct(player->direction);
                 }
                 x++;
             }
@@ -131,7 +131,6 @@ __global__ void GPU_Raycast(Uint32 * pixels, Direction * playerDirection, Coordi
             pixels[y * SCREEN_WIDTH + column] = tex1Dfetch<Uint32>(tex, sourceY * TEXTURE_WIDTH + textureX);
             textureY++;
         }
-
 #else
         for (int y = realStart; y < realEnd; ++y) {
             pixels[y * SCREEN_WIDTH + column] = 0xFF0000 - hitDirection * 0x330000;
@@ -278,7 +277,7 @@ bool initSDL() {
         std::cerr << "Failed to load image: " << IMG_GetError() << std::endl;
         IMG_Quit();
         SDL_Quit();
-        return -1;
+        return false;
     }
     gTexture = static_cast<Uint32*>(surface->pixels);
 #endif
@@ -357,14 +356,19 @@ int main(int argc, char* args[]) {
 
 #if USE_GPU
     Uint32* gpuPixels;
+    Player* gpuPlayer;
+    Camera* gpuCamera;
     Direction* gpuPlayerDirection;
     Coordinate* gpuPlayerCoordinate;
     Direction* gpuCameraDirection;
     cudaMalloc((void**)&gpuPixels, SCREEN_HEIGHT * SCREEN_WIDTH * sizeof(Uint32));
+    cudaMalloc((void**)&gpuPlayer, sizeof(Player));
+    cudaMalloc((void**)&gpuCamera, sizeof(Camera));
     cudaMalloc((void**)&gpuPlayerDirection, sizeof(Direction));
     cudaMalloc((void**)&gpuPlayerCoordinate, sizeof(Coordinate));
     cudaMalloc((void**)&gpuCameraDirection, sizeof(Direction));
     map->copyMapToGPU();
+
     int blockSize = 256;
     int numBlocks = (SCREEN_WIDTH + blockSize - 1) / blockSize;
 
@@ -404,13 +408,22 @@ int main(int argc, char* args[]) {
 
 #if USE_GPU
             cudaMemset(gpuPixels, 0x000000, SCREEN_HEIGHT * SCREEN_WIDTH * sizeof(Uint32));
+            cudaMemcpy(gpuPlayer, player, sizeof(Player), cudaMemcpyHostToDevice);
+
+            cudaMemcpy(gpuCamera, player->camera, sizeof(Camera), cudaMemcpyHostToDevice);
             cudaMemcpy(gpuPlayerDirection, player->direction, sizeof(Direction), cudaMemcpyHostToDevice);
             cudaMemcpy(gpuPlayerCoordinate, player->coordinate, sizeof(Coordinate), cudaMemcpyHostToDevice);
             cudaMemcpy(gpuCameraDirection, player->camera->direction, sizeof(Direction), cudaMemcpyHostToDevice);
+
+            // Populate player pointers
+            cudaMemcpy(&(gpuPlayer->direction), &gpuPlayerDirection, sizeof(Direction*), cudaMemcpyHostToDevice);
+            cudaMemcpy(&(gpuPlayer->coordinate), &gpuPlayerCoordinate, sizeof(Coordinate*), cudaMemcpyHostToDevice);
+            cudaMemcpy(&(gpuPlayer->camera), &gpuCamera, sizeof(Camera*), cudaMemcpyHostToDevice);
+            cudaMemcpy(&(gpuCamera->direction), &gpuCameraDirection, sizeof(Direction*), cudaMemcpyHostToDevice);
 #if USE_TEXTURE
-            GPU_Raycast << <numBlocks, blockSize >> > (gpuPixels, gpuPlayerDirection, gpuPlayerCoordinate, gpuCameraDirection, player->camera->distanceToPlayer, tex);
+            GPU_Raycast << <numBlocks, blockSize >> > (gpuPixels, gpuPlayer, tex);
 #else
-            GPU_Raycast << <numBlocks, blockSize >> > (gpuPixels, gpuPlayerDirection, gpuPlayerCoordinate, gpuCameraDirection, player->camera->distanceToPlayer);
+            GPU_Raycast << <numBlocks, blockSize >> > (gpuPixels, gpuPlayer);
 #endif
             quit = handle_keys(delta, player);
             cudaDeviceSynchronize();
@@ -436,9 +449,15 @@ int main(int argc, char* args[]) {
 
 #if USE_GPU
     cudaFree(gpuPixels);
+    cudaFree(gpuPlayer);
     cudaFree(gpuPlayerDirection);
     cudaFree(gpuPlayerCoordinate);
     cudaFree(gpuCameraDirection);
+    cudaFree(gpuCamera);
+#if USE_TEXTURE
+    cudaDestroyTextureObject(tex);
+    cudaFree(textureData);
+#endif
 #endif
     return 0;
 }
