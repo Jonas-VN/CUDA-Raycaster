@@ -9,30 +9,37 @@
 #if USE_GPU
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
+
+__constant__ int gpuMap[MAP_HEIGHT][MAP_WIDTH];
 #endif
 
 #if USE_TEXTURE
 #include <SDL_image.h>
-
-Uint32* gTexture = nullptr;
 #endif
-
 
 SDL_Window* gWindow = nullptr;
 SDL_Surface* gSurface = nullptr;
 
-
+// This may be ugly code, but it does show the difference between GPU and CPU code rather easily without much effort
 #if USE_GPU
 #if USE_TEXTURE
-__global__ void GPU_Raycast(Uint32* pixels, Player* player, cudaTextureObject_t tex) {
+__global__ void raycast(Uint32* pixels, Player* player, cudaTextureObject_t tex) {
 #else
-__global__ void GPU_Raycast(Uint32 * pixels, Player* player) {
+__global__ void raycast(Uint32 * pixels, Player* player) {
 #endif
     int column = blockIdx.x * blockDim.x + threadIdx.x;
-    double factor;
     if (column < SCREEN_WIDTH) {
+#else
+#if USE_TEXTURE
+void raycast(Uint32* pixels, Player* player, const Map* map, Uint32* texture) {
+#else
+void raycast(Uint32* pixels, Player* player, const Map* map) {
+#endif
+    for (int column = 0; column < SCREEN_WIDTH; column++) {
+#endif
+
         // Calculate ray direction
-        factor = -1.0 + 2.0 * column / SCREEN_WIDTH;
+        double factor = -1.0 + 2.0 * column / SCREEN_WIDTH;
         Direction rayDirection = Direction(
             player->camera->distanceToPlayer * player->direction->x + factor * player->camera->direction->x,
             player->camera->distanceToPlayer * player->direction->y + factor * player->camera->direction->y
@@ -78,7 +85,11 @@ __global__ void GPU_Raycast(Uint32 * pixels, Player* player) {
                         std::floor(intersection.y)
                     );
                 }
-                if (d_map[(int) roundedIntersection.y][(int) roundedIntersection.x]) {
+#if USE_GPU
+                if (gpuMap[(int) roundedIntersection.y][(int) roundedIntersection.x]) {
+#else
+                if (map->isWall(&roundedIntersection)) {
+#endif
                     hit = true;
                     distanceToWall = factor * rayDirection.dotProduct(player->direction);
                     hitDirection = 1;
@@ -103,8 +114,11 @@ __global__ void GPU_Raycast(Uint32 * pixels, Player* player) {
                         std::round(intersection.y)
                     );
                 }
-
-                if (d_map[(int) roundedIntersection.y][(int) roundedIntersection.x]) {
+#if USE_GPU
+                if (gpuMap[(int)roundedIntersection.y][(int)roundedIntersection.x]) {
+#else
+                if (map->isWall(&roundedIntersection)) {
+#endif
                     hit = true;
                     distanceToWall = factor * rayDirection.dotProduct(player->direction);
                 }
@@ -125,134 +139,23 @@ __global__ void GPU_Raycast(Uint32 * pixels, Player* player) {
         else textureX = (int)((intersection.y - std::floor(intersection.y)) * TEXTURE_WIDTH);
         double ratio = (double)TEXTURE_HEIGHT / (end - start);
         double textureY = start >= 0 ? 0.0 : -start;
-
-        for (int y = realStart; y < realEnd; ++y) {
-            int sourceY = (int)(textureY * ratio);
-            pixels[y * SCREEN_WIDTH + column] = tex1Dfetch<Uint32>(tex, sourceY * TEXTURE_WIDTH + textureX);
-            textureY++;
-        }
-#else
-        for (int y = realStart; y < realEnd; ++y) {
-            pixels[y * SCREEN_WIDTH + column] = 0xFF0000 - hitDirection * 0x330000;
-        }
 #endif
-    }
-}
-#else
-void CPU_Raycast(Uint32* pixels, Player* player, const Map* map) {
-    double factor;
-    for (int column = 0; column < SCREEN_WIDTH; column++) {
 
-        // Calculate ray direction
-        factor = -1.0 + 2.0 * column / SCREEN_WIDTH;
-        Direction rayDirection = Direction(
-            player->camera->distanceToPlayer * player->direction->x + factor * player->camera->direction->x,
-            player->camera->distanceToPlayer * player->direction->y + factor * player->camera->direction->y
-        );
-        rayDirection.normalize();
-
-        // Raycast
-        int x = 0;
-        int y = 0;
-        double delta_v = abs(1 / rayDirection.x);
-        double delta_h = abs(1 / rayDirection.y);
-
-        double verticalDistance;
-        if (rayDirection.x < 0) verticalDistance = (player->coordinate->x - std::floor(player->coordinate->x)) * delta_v;
-        else verticalDistance = (std::ceil(player->coordinate->x) - player->coordinate->x) * delta_v;
-
-        double horizontalDistance;
-        if (rayDirection.y < 0) horizontalDistance = (player->coordinate->y - std::floor(player->coordinate->y)) * delta_h;
-        else horizontalDistance = (std::ceil(player->coordinate->y) - player->coordinate->y) * delta_h;
-
-        Coordinate roundedIntersection;
-        Coordinate intersection;
-        int hitDirection = 0;
-        double distanceToWall = 0.0;
-        bool hit = false;
-        while (!hit) {
-            if (verticalDistance + y * delta_v < horizontalDistance + x * delta_h) {
-                factor = verticalDistance + y * delta_v;
-                intersection = Coordinate(
-                    rayDirection.x * factor + player->coordinate->x,
-                    rayDirection.y * factor + player->coordinate->y
-                );
-
-                if (rayDirection.x < 0) {
-                    roundedIntersection = Coordinate(
-                        std::round(intersection.x) - 1.0,
-                        std::floor(intersection.y)
-                    );
-                }
-                else {
-                    roundedIntersection = Coordinate(
-                        std::round(intersection.x),
-                        std::floor(intersection.y)
-                    );
-                }
-                if (map->isWall(&roundedIntersection)) {
-                    hit = true;
-                    distanceToWall = factor * rayDirection.dotProduct(player->direction);
-                    hitDirection = 1;
-                }
-                y++;
-            }
-            else {
-                factor = horizontalDistance + x * delta_h;
-                intersection = Coordinate(
-                    rayDirection.x * factor + player->coordinate->x,
-                    rayDirection.y * factor + player->coordinate->y
-                );
-                if (rayDirection.y < 0) {
-                    roundedIntersection = Coordinate(
-                        std::floor(intersection.x),
-                        std::round(intersection.y) - 1.0
-                    );
-                }
-                else {
-                    roundedIntersection = Coordinate(
-                        std::floor(intersection.x),
-                        std::round(intersection.y)
-                    );
-                }
-
-                if (map->isWall(&roundedIntersection)) {
-                    hit = true;
-                    distanceToWall = factor * rayDirection.dotProduct(player->direction);
-                }
-                x++;
-            }
-        }
-
-        double length = 1 / distanceToWall * SCREEN_HEIGHT;
-        int start = (SCREEN_HEIGHT - length) / 2;
-        int end = start + length;
-
-        int realStart = start >= 0 ? start : 0;
-        int realEnd = end <= SCREEN_HEIGHT ? end : SCREEN_HEIGHT;
-
+        for (int y = realStart; y < realEnd; ++y) {
 #if USE_TEXTURE
-        int textureX;
-        if (hitDirection == 0) textureX = (int) ((intersection.x - std::floor(intersection.x)) * TEXTURE_WIDTH);
-        else textureX = (int) ((intersection.y - std::floor(intersection.y)) * TEXTURE_WIDTH);
-        double ratio = (double) TEXTURE_HEIGHT / (end - start);
-        double textureY = start >= 0 ? 0.0 : -start;
-
-        for (int y = realStart; y < realEnd; ++y) {
-            int sourceY = (int) (textureY * ratio);
-            pixels[y * SCREEN_WIDTH + column] = gTexture[sourceY * TEXTURE_WIDTH + textureX];
-            textureY++;
-        }
-
+            int sourceY = (int)(textureY * ratio);
+#if USE_GPU
+            pixels[y * SCREEN_WIDTH + column] = tex1Dfetch<Uint32>(tex, sourceY * TEXTURE_WIDTH + textureX);
 #else
-        for (int y = realStart; y < realEnd; ++y) {
-            pixels[y * SCREEN_WIDTH + column] = 0xFF0000 - hitDirection * 0x330000;
-        }
+            pixels[y * SCREEN_WIDTH + column] = texture[sourceY * TEXTURE_WIDTH + textureX];
 #endif
+            textureY++;
+#else
+            pixels[y * SCREEN_WIDTH + column] = 0xFF0000 - hitDirection * 0x330000;
+#endif
+        }
     }
 }
-#endif
-
 
 bool initSDL() {
     // Initialize SDL
@@ -269,17 +172,6 @@ bool initSDL() {
         SDL_Quit();
         return false;
     }
-
-    // Load image
-    SDL_Surface* surface = IMG_Load("src/wall.png");
-    surface = SDL_ConvertSurfaceFormat(surface, SDL_PIXELFORMAT_RGBA32, 0);
-    if (!surface) {
-        std::cerr << "Failed to load image: " << IMG_GetError() << std::endl;
-        IMG_Quit();
-        SDL_Quit();
-        return false;
-    }
-    gTexture = static_cast<Uint32*>(surface->pixels);
 #endif
 
     // Create window
@@ -309,6 +201,20 @@ void closeSDL() {
     // Quit SDL subsystems
     SDL_Quit();
 }
+
+#if USE_TEXTURE
+Uint32* loadImage(const char *filepath) {
+    SDL_Surface* surface = IMG_Load(filepath);
+    surface = SDL_ConvertSurfaceFormat(surface, SDL_PIXELFORMAT_RGBA32, 0);
+    if (!surface) {
+        std::cerr << "Failed to load image: " << IMG_GetError() << std::endl;
+        IMG_Quit();
+        SDL_Quit();
+        return false;
+    }
+    return static_cast<Uint32*>(surface->pixels);
+}
+#endif
 
 bool handle_keys(double delta, Player* player) {
     SDL_Event e;
@@ -354,7 +260,16 @@ int main(int argc, char* args[]) {
     const Map* map = new Map();
     Player* player = new Player(map);
 
+    double totalDeltaTime = 0.0;
+    int numFrames = 0;
+
+#if USE_TEXTURE
+    Uint32* texture = loadImage("src/wall.png");
+#endif
+
 #if USE_GPU
+    cudaMemcpyToSymbol(gpuMap, map, MAP_HEIGHT * MAP_WIDTH * sizeof(int));
+
     Uint32* gpuPixels;
     Player* gpuPlayer;
     Camera* gpuCamera;
@@ -367,7 +282,14 @@ int main(int argc, char* args[]) {
     cudaMalloc((void**)&gpuPlayerDirection, sizeof(Direction));
     cudaMalloc((void**)&gpuPlayerCoordinate, sizeof(Coordinate));
     cudaMalloc((void**)&gpuCameraDirection, sizeof(Direction));
-    map->copyMapToGPU();
+
+    // The player is technically constant since only the pointers are relevant
+    cudaMemcpy(gpuPlayer, player, sizeof(Player), cudaMemcpyHostToDevice);
+
+    // Populate pointers (these can be copied in advance because the gpuPlayer never changes and thus the pointers stay relevant (This is not the case for player->camera->direction))
+    cudaMemcpy(&(gpuPlayer->direction), &gpuPlayerDirection, sizeof(Direction*), cudaMemcpyHostToDevice);
+    cudaMemcpy(&(gpuPlayer->coordinate), &gpuPlayerCoordinate, sizeof(Coordinate*), cudaMemcpyHostToDevice);
+    cudaMemcpy(&(gpuPlayer->camera), &gpuCamera, sizeof(Camera*), cudaMemcpyHostToDevice);
 
     int blockSize = 256;
     int numBlocks = (SCREEN_WIDTH + blockSize - 1) / blockSize;
@@ -375,7 +297,7 @@ int main(int argc, char* args[]) {
 #if USE_TEXTURE
     Uint32* textureData;
     cudaMalloc((void**)&textureData, TEXTURE_HEIGHT * TEXTURE_WIDTH * sizeof(Uint32));
-    cudaMemcpy(textureData, gTexture, TEXTURE_HEIGHT * TEXTURE_WIDTH * sizeof(Uint32), cudaMemcpyHostToDevice);
+    cudaMemcpy(textureData, texture, TEXTURE_HEIGHT * TEXTURE_WIDTH * sizeof(Uint32), cudaMemcpyHostToDevice);
 
     cudaResourceDesc resDesc;
     memset(&resDesc, 0, sizeof(resDesc));
@@ -388,18 +310,18 @@ int main(int argc, char* args[]) {
     memset(&texDesc, 0, sizeof(texDesc));
     texDesc.readMode = cudaReadModeElementType;
 
-    cudaTextureObject_t tex = 0;
-    cudaCreateTextureObject(&tex, &resDesc, &texDesc, NULL);
+    cudaTextureObject_t gpuTexture = 0;
+    cudaCreateTextureObject(&gpuTexture, &resDesc, &texDesc, NULL);
 #endif
-
 #endif
-
     double currentTime = (double) SDL_GetTicks64();
     double prevTime = currentTime;
     bool quit = false;
     while (!quit) {
         currentTime = (double) SDL_GetTicks64();
         double delta = (currentTime - prevTime) / 1000.0;
+        totalDeltaTime += delta;
+        numFrames++;
         prevTime = currentTime;
         int fps = (int) (1 / delta);
 
@@ -407,31 +329,34 @@ int main(int argc, char* args[]) {
             Uint32* pixels = (Uint32*)gSurface->pixels;
 
 #if USE_GPU
-            cudaMemset(gpuPixels, 0x000000, SCREEN_HEIGHT * SCREEN_WIDTH * sizeof(Uint32));
-            cudaMemcpy(gpuPlayer, player, sizeof(Player), cudaMemcpyHostToDevice);
+            cudaMemset(gpuPixels, BACKGROUND_COLOR, SCREEN_HEIGHT * SCREEN_WIDTH * sizeof(Uint32));
 
+            // Copy the content of the player
             cudaMemcpy(gpuCamera, player->camera, sizeof(Camera), cudaMemcpyHostToDevice);
             cudaMemcpy(gpuPlayerDirection, player->direction, sizeof(Direction), cudaMemcpyHostToDevice);
             cudaMemcpy(gpuPlayerCoordinate, player->coordinate, sizeof(Coordinate), cudaMemcpyHostToDevice);
             cudaMemcpy(gpuCameraDirection, player->camera->direction, sizeof(Direction), cudaMemcpyHostToDevice);
 
-            // Populate player pointers
-            cudaMemcpy(&(gpuPlayer->direction), &gpuPlayerDirection, sizeof(Direction*), cudaMemcpyHostToDevice);
-            cudaMemcpy(&(gpuPlayer->coordinate), &gpuPlayerCoordinate, sizeof(Coordinate*), cudaMemcpyHostToDevice);
-            cudaMemcpy(&(gpuPlayer->camera), &gpuCamera, sizeof(Camera*), cudaMemcpyHostToDevice);
+            // (Re)populate player->camera pointer (this has to be done because the camera is copied every frame and thus the previous pointer is lost?)
             cudaMemcpy(&(gpuCamera->direction), &gpuCameraDirection, sizeof(Direction*), cudaMemcpyHostToDevice);
-#if USE_TEXTURE
-            GPU_Raycast << <numBlocks, blockSize >> > (gpuPixels, gpuPlayer, tex);
+
+    #if USE_TEXTURE
+            raycast << <numBlocks, blockSize >> > (gpuPixels, gpuPlayer, gpuTexture);
+    #else
+            raycast << <numBlocks, blockSize >> > (gpuPixels, gpuPlayer);
+    #endif
 #else
-            GPU_Raycast << <numBlocks, blockSize >> > (gpuPixels, gpuPlayer);
+            memset(pixels, BACKGROUND_COLOR, SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(Uint32));
+    #if USE_TEXTURE
+            raycast(pixels, player, map, texture);
+    #else
+            raycast(pixels, player, map);
+    #endif
 #endif
             quit = handle_keys(delta, player);
+#if USE_GPU
             cudaDeviceSynchronize();
             cudaMemcpy(pixels, gpuPixels, SCREEN_HEIGHT * SCREEN_WIDTH * sizeof(Uint32), cudaMemcpyDeviceToHost);
-#else
-            memset(pixels, 0x000000, SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(Uint32));
-            CPU_Raycast(pixels, player, map);
-            quit = handle_keys(delta, player);
 #endif
 
             gSurface->pixels = pixels;
@@ -455,9 +380,11 @@ int main(int argc, char* args[]) {
     cudaFree(gpuCameraDirection);
     cudaFree(gpuCamera);
 #if USE_TEXTURE
-    cudaDestroyTextureObject(tex);
+    cudaDestroyTextureObject(gpuTexture);
     cudaFree(textureData);
 #endif
 #endif
+
+    std::cout << "Average FPS: " << 1 / (totalDeltaTime / numFrames) << std::endl;
     return 0;
 }

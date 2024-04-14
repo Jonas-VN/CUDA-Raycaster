@@ -1,6 +1,5 @@
 #pragma once
 #include "camera.h"
-#include "direction.hpp"
 #include "settings.hpp"
 #include <cmath>
 

@@ -1,7 +1,6 @@
 #pragma once
 #include "player.h"
 #include "settings.hpp"
-#include "coordinate.hpp"
 
 Player::Player(const Map* map) {
     this->coordinate = new Coordinate(PLAYER_START_COORDINATE_X, PLAYER_START_COORDINATE_Y);

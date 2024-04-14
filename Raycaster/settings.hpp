@@ -2,7 +2,7 @@
 #include <cmath>
 
 #define USE_GPU true
-#define USE_TEXTURE false
+#define USE_TEXTURE true
 
 #define SCREEN_WIDTH 1600
 #define SCREEN_HEIGHT 1000
@@ -23,3 +23,5 @@
 #define PLAYER_START_COORDINATE_Y 4 - 1 / sqrt(2)
 #define PLAYER_START_DIRECTION_X 1 / sqrt(2)
 #define PLAYER_START_DIRECTION_Y -1 / sqrt(2)
+
+#define BACKGROUND_COLOR 0x000000
