@@ -79,14 +79,14 @@ void raycast(Uint32* pixels, Player* player, const Map* map) {
 
                 if (rayDirection.x < 0) {
                     roundedIntersection = Coordinate(
-                        std::round(intersection.x) - 1.0,
-                        std::floor(intersection.y)
+                        round(intersection.x) - 1.0,
+                        floor(intersection.y)
                     );
                 }
                 else {
                     roundedIntersection = Coordinate(
-                        std::round(intersection.x),
-                        std::floor(intersection.y)
+                        round(intersection.x),
+                        floor(intersection.y)
                     );
                 }
 #if USE_GPU
@@ -108,14 +108,14 @@ void raycast(Uint32* pixels, Player* player, const Map* map) {
                 );
                 if (rayDirection.y < 0) {
                     roundedIntersection = Coordinate(
-                        std::floor(intersection.x),
-                        std::round(intersection.y) - 1.0
+                        floor(intersection.x),
+                        round(intersection.y) - 1.0
                     );
                 }
                 else {
                     roundedIntersection = Coordinate(
-                        std::floor(intersection.x),
-                        std::round(intersection.y)
+                        floor(intersection.x),
+                        round(intersection.y)
                     );
                 }
 #if USE_GPU
@@ -139,8 +139,8 @@ void raycast(Uint32* pixels, Player* player, const Map* map) {
 
 #if USE_TEXTURE
         int textureX;
-        if (hitDirection == 0) textureX = (int)((intersection.x - std::floor(intersection.x)) * TEXTURE_WIDTH);
-        else textureX = (int)((intersection.y - std::floor(intersection.y)) * TEXTURE_WIDTH);
+        if (hitDirection == 0) textureX = (int)((intersection.x - floor(intersection.x)) * TEXTURE_WIDTH);
+        else textureX = (int)((intersection.y - floor(intersection.y)) * TEXTURE_WIDTH);
         double ratio = (double)TEXTURE_HEIGHT / (end - start);
         double textureY = start >= 0 ? 0.0 : -start;
 #endif
