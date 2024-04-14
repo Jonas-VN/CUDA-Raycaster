@@ -25,3 +25,5 @@
 #define PLAYER_START_DIRECTION_Y -1 / sqrt(2)
 
 #define BACKGROUND_COLOR 0x000000
+
+#define TEST_MEMORY_LEAKS true

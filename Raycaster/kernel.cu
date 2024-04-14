@@ -6,6 +6,10 @@
 #include <iostream>
 #include <string>
 
+#if TEST_MEMORY_LEAKS
+#include <crtdbg.h>
+#endif
+
 #if USE_GPU
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
@@ -386,5 +390,9 @@ int main(int argc, char* args[]) {
 #endif
 
     std::cout << "Average FPS: " << 1 / (totalDeltaTime / numFrames) << std::endl;
+
+#if TEST_MEMORY_LEAKS
+    _CrtDumpMemoryLeaks();
+#endif
     return 0;
 }
