@@ -287,13 +287,15 @@ int main(int argc, char* args[]) {
     cudaMalloc((void**)&gpuPlayerCoordinate, sizeof(Coordinate));
     cudaMalloc((void**)&gpuCameraDirection, sizeof(Direction));
 
-    // The player is technically constant since only the pointers are relevant
+    // The player & camera are technically constant since only the pointers are relevant or the other fields are constant
     cudaMemcpy(gpuPlayer, player, sizeof(Player), cudaMemcpyHostToDevice);
+    cudaMemcpy(gpuCamera, player->camera, sizeof(Camera), cudaMemcpyHostToDevice);
 
-    // Populate pointers (these can be copied in advance because the gpuPlayer never changes and thus the pointers stay relevant (This is not the case for player->camera->direction))
+    // Populate pointers (these can be copied in advance because the gpuPlayer & gpuCamera never changes and thus the pointers stay relevant)
     cudaMemcpy(&(gpuPlayer->direction), &gpuPlayerDirection, sizeof(Direction*), cudaMemcpyHostToDevice);
     cudaMemcpy(&(gpuPlayer->coordinate), &gpuPlayerCoordinate, sizeof(Coordinate*), cudaMemcpyHostToDevice);
     cudaMemcpy(&(gpuPlayer->camera), &gpuCamera, sizeof(Camera*), cudaMemcpyHostToDevice);
+    cudaMemcpy(&(gpuCamera->direction), &gpuCameraDirection, sizeof(Direction*), cudaMemcpyHostToDevice);
 
     int blockSize = 256;
     int numBlocks = (SCREEN_WIDTH + blockSize - 1) / blockSize;
@@ -336,13 +338,9 @@ int main(int argc, char* args[]) {
             cudaMemset(gpuPixels, BACKGROUND_COLOR, SCREEN_HEIGHT * SCREEN_WIDTH * sizeof(Uint32));
 
             // Copy the content of the player
-            cudaMemcpy(gpuCamera, player->camera, sizeof(Camera), cudaMemcpyHostToDevice);
             cudaMemcpy(gpuPlayerDirection, player->direction, sizeof(Direction), cudaMemcpyHostToDevice);
             cudaMemcpy(gpuPlayerCoordinate, player->coordinate, sizeof(Coordinate), cudaMemcpyHostToDevice);
             cudaMemcpy(gpuCameraDirection, player->camera->direction, sizeof(Direction), cudaMemcpyHostToDevice);
-
-            // (Re)populate player->camera pointer (this has to be done because the camera is copied every frame and thus the previous pointer is lost?)
-            cudaMemcpy(&(gpuCamera->direction), &gpuCameraDirection, sizeof(Direction*), cudaMemcpyHostToDevice);
 
     #if USE_TEXTURE
             raycast << <numBlocks, blockSize >> > (gpuPixels, gpuPlayer, gpuTexture);
