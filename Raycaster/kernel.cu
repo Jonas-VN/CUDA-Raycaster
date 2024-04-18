@@ -297,7 +297,7 @@ int main(int argc, char* args[]) {
     cudaMemcpy(&(gpuPlayer->camera), &gpuCamera, sizeof(Camera*), cudaMemcpyHostToDevice);
     cudaMemcpy(&(gpuCamera->direction), &gpuCameraDirection, sizeof(Direction*), cudaMemcpyHostToDevice);
 
-    int blockSize = 256;
+    int blockSize = SCREEN_WIDTH > 1024 ? 1024 : SCREEN_WIDTH;
     int numBlocks = (SCREEN_WIDTH + blockSize - 1) / blockSize;
 
 #if USE_TEXTURE
