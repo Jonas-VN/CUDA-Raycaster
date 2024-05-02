@@ -25,23 +25,24 @@ SDL_Window* gWindow = nullptr;
 SDL_Surface* gSurface = nullptr;
 
 // This may be ugly code, but it does show the difference between GPU and CPU code rather easily without much effort
-#if USE_GPU
-#if USE_TEXTURE
+#if USE_GPU && USE_TEXTURE
 __global__ void raycast(Uint32* pixels, Player* player, cudaTextureObject_t tex) {
-#else
-__global__ void raycast(Uint32 * pixels, Player* player) {
+#elif USE_GPU && !USE_TEXTURE
+__global__ void raycast(Uint32 * pixels, Player * player) {
+#elif !USE_GPU && USE_TEXTURE
+void raycast(Uint32 * pixels, Player * player, const Map * map, Uint32 * texture) {
+#elif !USE_GPU && !USE_TEXTURE
+void raycast(Uint32 * pixels, Player * player, const Map * map) {
 #endif
+
+// On the GPU: if statment to check bounds
+// On the CPU: for loop
+#if USE_GPU
     int column = blockIdx.x * blockDim.x + threadIdx.x;
     if (column < SCREEN_WIDTH) {
 #else
-#if USE_TEXTURE
-void raycast(Uint32* pixels, Player* player, const Map* map, Uint32* texture) {
-#else
-void raycast(Uint32* pixels, Player* player, const Map* map) {
-#endif
     for (int column = 0; column < SCREEN_WIDTH; column++) {
 #endif
-
         // Calculate ray direction
         double factor = -1.0 + 2.0 * column / SCREEN_WIDTH;
         Direction rayDirection = Direction(
@@ -90,7 +91,7 @@ void raycast(Uint32* pixels, Player* player, const Map* map) {
                     );
                 }
 #if USE_GPU
-                if (gpuMap[(int) roundedIntersection.y][(int) roundedIntersection.x]) {
+                if (gpuMap[(int)roundedIntersection.y][(int)roundedIntersection.x]) {
 #else
                 if (map->isWall(&roundedIntersection)) {
 #endif
@@ -99,7 +100,7 @@ void raycast(Uint32* pixels, Player* player, const Map* map) {
                     hitDirection = 1;
                 }
                 y++;
-            }
+                }
             else {
                 factor = horizontalDistance + x * delta_h;
                 intersection = Coordinate(
@@ -127,8 +128,8 @@ void raycast(Uint32* pixels, Player* player, const Map* map) {
                     distanceToWall = factor * rayDirection.dotProduct(player->direction);
                 }
                 x++;
+                }
             }
-        }
 
         double length = 1 / distanceToWall * SCREEN_HEIGHT;
         int start = (SCREEN_HEIGHT - length) / 2;
@@ -147,19 +148,18 @@ void raycast(Uint32* pixels, Player* player, const Map* map) {
 
         for (int y = realStart; y < realEnd; ++y) {
 #if USE_TEXTURE
-            int sourceY = (int)(textureY * ratio);
-#if USE_GPU
-            pixels[y * SCREEN_WIDTH + column] = tex1Dfetch<Uint32>(tex, sourceY * TEXTURE_WIDTH + textureX);
-#else
-            pixels[y * SCREEN_WIDTH + column] = texture[sourceY * TEXTURE_WIDTH + textureX];
+            int sourceY = (int)(textureY++ * ratio);
 #endif
-            textureY++;
+#if USE_GPU && USE_TEXTURE
+            pixels[y * SCREEN_WIDTH + column] = tex1Dfetch<Uint32>(tex, sourceY * TEXTURE_WIDTH + textureX);
+#elif !USE_GPU && USE_TEXTURE
+            pixels[y * SCREEN_WIDTH + column] = texture[sourceY * TEXTURE_WIDTH + textureX];
 #else
             pixels[y * SCREEN_WIDTH + column] = 0xFF0000 - hitDirection * 0x330000;
 #endif
         }
-    }
-}
+            }
+        }
 
 bool initSDL() {
     // Initialize SDL
@@ -207,7 +207,7 @@ void closeSDL() {
 }
 
 #if USE_TEXTURE
-Uint32* loadImage(const char *filepath) {
+Uint32* loadImage(const char* filepath) {
     SDL_Surface* surface = IMG_Load(filepath);
     surface = SDL_ConvertSurfaceFormat(surface, SDL_PIXELFORMAT_RGBA32, 0);
     if (!surface) {
@@ -220,7 +220,7 @@ Uint32* loadImage(const char *filepath) {
 }
 #endif
 
-bool handle_keys(double delta, Player* player) {
+bool handle_keys(double delta, Player * player) {
     SDL_Event e;
     bool quit = false;
 
@@ -299,8 +299,9 @@ int main(int argc, char* args[]) {
 
     int blockSize = SCREEN_WIDTH > 1024 ? 1024 : SCREEN_WIDTH;
     int numBlocks = (SCREEN_WIDTH + blockSize - 1) / blockSize;
+#endif
 
-#if USE_TEXTURE
+#if USE_GPU && USE_TEXTURE
     Uint32* textureData;
     cudaMalloc((void**)&textureData, TEXTURE_HEIGHT * TEXTURE_WIDTH * sizeof(Uint32));
     cudaMemcpy(textureData, texture, TEXTURE_HEIGHT * TEXTURE_WIDTH * sizeof(Uint32), cudaMemcpyHostToDevice);
@@ -319,43 +320,43 @@ int main(int argc, char* args[]) {
     cudaTextureObject_t gpuTexture = 0;
     cudaCreateTextureObject(&gpuTexture, &resDesc, &texDesc, NULL);
 #endif
-#endif
-    double currentTime = (double) SDL_GetTicks64();
+
+    double currentTime = (double)SDL_GetTicks64();
     double prevTime = currentTime;
     bool quit = false;
     while (!quit) {
-        currentTime = (double) SDL_GetTicks64();
+        currentTime = (double)SDL_GetTicks64();
         double delta = (currentTime - prevTime) / 1000.0;
         totalDeltaTime += delta;
         numFrames++;
         prevTime = currentTime;
-        int fps = (int) (1 / delta);
+        int fps = (int)(1 / delta);
 
         if (SDL_LockSurface(gSurface) == 0) {
             Uint32* pixels = (Uint32*)gSurface->pixels;
 
 #if USE_GPU
             cudaMemset(gpuPixels, BACKGROUND_COLOR, SCREEN_HEIGHT * SCREEN_WIDTH * sizeof(Uint32));
-
             // Copy the content of the player
             cudaMemcpy(gpuPlayerDirection, player->direction, sizeof(Direction), cudaMemcpyHostToDevice);
             cudaMemcpy(gpuPlayerCoordinate, player->coordinate, sizeof(Coordinate), cudaMemcpyHostToDevice);
             cudaMemcpy(gpuCameraDirection, player->camera->direction, sizeof(Direction), cudaMemcpyHostToDevice);
-
-    #if USE_TEXTURE
-            raycast << <numBlocks, blockSize >> > (gpuPixels, gpuPlayer, gpuTexture);
-    #else
-            raycast << <numBlocks, blockSize >> > (gpuPixels, gpuPlayer);
-    #endif
 #else
             memset(pixels, BACKGROUND_COLOR, SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(Uint32));
-    #if USE_TEXTURE
-            raycast(pixels, player, map, texture);
-    #else
-            raycast(pixels, player, map);
-    #endif
 #endif
+
+#if USE_GPU && USE_TEXTURE
+            raycast << <numBlocks, blockSize >> > (gpuPixels, gpuPlayer, gpuTexture);
+#elif USE_GPU && !USE_TEXTURE
+            raycast << <numBlocks, blockSize >> > (gpuPixels, gpuPlayer);
+#elif !USE_GPU && USE_TEXTURE
+            raycast(pixels, player, map, texture);
+#elif !USE_GPU && !USE_TEXTURE
+            raycast(pixels, player, map);
+#endif
+
             quit = handle_keys(delta, player);
+
 #if USE_GPU
             cudaDeviceSynchronize();
             cudaMemcpy(pixels, gpuPixels, SCREEN_HEIGHT * SCREEN_WIDTH * sizeof(Uint32), cudaMemcpyDeviceToHost);
@@ -381,10 +382,11 @@ int main(int argc, char* args[]) {
     cudaFree(gpuPlayerCoordinate);
     cudaFree(gpuCameraDirection);
     cudaFree(gpuCamera);
-#if USE_TEXTURE
+#endif
+
+#if USE_GPU && USE_TEXTURE
     cudaDestroyTextureObject(gpuTexture);
     cudaFree(textureData);
-#endif
 #endif
 
     std::cout << "Average FPS: " << 1 / (totalDeltaTime / numFrames) << std::endl;
@@ -392,5 +394,6 @@ int main(int argc, char* args[]) {
 #if TEST_MEMORY_LEAKS
     _CrtDumpMemoryLeaks();
 #endif
+
     return 0;
 }
