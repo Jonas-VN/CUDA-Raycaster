@@ -301,7 +301,7 @@ int main(int argc, char* args[]) {
     cudaMemcpy(&(gpuPlayer->camera), &gpuCamera, sizeof(Camera*), cudaMemcpyHostToDevice);
     cudaMemcpy(&(gpuCamera->direction), &gpuCameraDirection, sizeof(Direction*), cudaMemcpyHostToDevice);
 
-    int blockSize = 128;
+    int blockSize = 64;
     int numBlocks = (SCREEN_WIDTH + blockSize - 1) / blockSize;
 #endif
 

@@ -5,8 +5,8 @@
 class Camera {
 public:
     Direction* direction;
-    int pov;
-    double distanceToPlayer;
+    const int pov;
+    const double distanceToPlayer;
 
 public:
     Camera(Direction* direction);

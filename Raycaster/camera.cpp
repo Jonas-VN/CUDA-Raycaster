@@ -3,11 +3,7 @@
 #include "settings.hpp"
 #include <cmath>
 
-Camera::Camera(Direction* direction) {
-    this->direction = direction;
-    this->pov = POV;
-    this->distanceToPlayer = atan(POV * DEG2RAD);
-}
+Camera::Camera(Direction* direction) : direction(direction), pov(POV), distanceToPlayer(atan(POV* DEG2RAD)) {}
 
 Camera::~Camera() {
     delete direction;
