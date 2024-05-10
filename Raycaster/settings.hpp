@@ -3,6 +3,7 @@
 
 #define USE_GPU true
 #define USE_TEXTURE true
+#define USE_TEXTURE_OBJECT true
 
 #define SCREEN_WIDTH 1900
 #define SCREEN_HEIGHT 1000

@@ -25,8 +25,10 @@ SDL_Window* gWindow = nullptr;
 SDL_Surface* gSurface = nullptr;
 
 // This may be ugly code, but it does show the difference between GPU and CPU code rather easily without much effort
-#if USE_GPU && USE_TEXTURE
-__global__ void raycast(Uint32* pixels, Player* player, cudaTextureObject_t tex) {
+#if USE_GPU && USE_TEXTURE && USE_TEXTURE_OBJECT
+__global__ void raycast(Uint32* pixels, Player* player, cudaTextureObject_t texture) {
+#elif USE_GPU && USE_TEXTURE && !USE_TEXTURE_OBJECT
+__global__ void raycast(Uint32 * pixels, Player * player, Uint32* texture) {
 #elif USE_GPU && !USE_TEXTURE
 __global__ void raycast(Uint32 * pixels, Player * player) {
 #elif !USE_GPU && USE_TEXTURE
@@ -150,16 +152,18 @@ void raycast(Uint32 * pixels, Player * player, const Map * map) {
 #if USE_TEXTURE
             int sourceY = (int)(textureY++ * ratio);
 #endif
-#if USE_GPU && USE_TEXTURE
-            pixels[y * SCREEN_WIDTH + column] = tex1Dfetch<Uint32>(tex, sourceY * TEXTURE_WIDTH + textureX);
+#if USE_GPU && USE_TEXTURE && USE_TEXTURE_OBJECT
+            pixels[y * SCREEN_WIDTH + column] = tex1Dfetch<Uint32>(texture, sourceY * TEXTURE_WIDTH + textureX);
+#elif USE_GPU && USE_TEXTURE && !USE_TEXTURE_OBJECT
+            pixels[y * SCREEN_WIDTH + column] = texture[sourceY * TEXTURE_WIDTH + textureX];
 #elif !USE_GPU && USE_TEXTURE
             pixels[y * SCREEN_WIDTH + column] = texture[sourceY * TEXTURE_WIDTH + textureX];
 #else
             pixels[y * SCREEN_WIDTH + column] = 0xFF0000 - hitDirection * 0x330000;
 #endif
         }
-            }
-        }
+    }
+}
 
 bool initSDL() {
     // Initialize SDL
@@ -297,7 +301,7 @@ int main(int argc, char* args[]) {
     cudaMemcpy(&(gpuPlayer->camera), &gpuCamera, sizeof(Camera*), cudaMemcpyHostToDevice);
     cudaMemcpy(&(gpuCamera->direction), &gpuCameraDirection, sizeof(Direction*), cudaMemcpyHostToDevice);
 
-    int blockSize = SCREEN_WIDTH > 1024 ? 1024 : SCREEN_WIDTH;
+    int blockSize = 128;
     int numBlocks = (SCREEN_WIDTH + blockSize - 1) / blockSize;
 #endif
 
@@ -305,7 +309,9 @@ int main(int argc, char* args[]) {
     Uint32* textureData;
     cudaMalloc((void**)&textureData, TEXTURE_HEIGHT * TEXTURE_WIDTH * sizeof(Uint32));
     cudaMemcpy(textureData, texture, TEXTURE_HEIGHT * TEXTURE_WIDTH * sizeof(Uint32), cudaMemcpyHostToDevice);
+#endif
 
+#if USE_GPU && USE_TEXTURE && USE_TEXTURE_OBJECT
     cudaResourceDesc resDesc;
     memset(&resDesc, 0, sizeof(resDesc));
     resDesc.resType = cudaResourceTypeLinear;
@@ -345,8 +351,10 @@ int main(int argc, char* args[]) {
             memset(pixels, BACKGROUND_COLOR, SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(Uint32));
 #endif
 
-#if USE_GPU && USE_TEXTURE
+#if USE_GPU && USE_TEXTURE && USE_TEXTURE_OBJECT
             raycast << <numBlocks, blockSize >> > (gpuPixels, gpuPlayer, gpuTexture);
+#elif USE_GPU && USE_TEXTURE && !USE_TEXTURE_OBJECT
+            raycast << <numBlocks, blockSize >> > (gpuPixels, gpuPlayer, textureData);
 #elif USE_GPU && !USE_TEXTURE
             raycast << <numBlocks, blockSize >> > (gpuPixels, gpuPlayer);
 #elif !USE_GPU && USE_TEXTURE
@@ -367,6 +375,8 @@ int main(int argc, char* args[]) {
             SDL_UpdateWindowSurface(gWindow);
             std::string windowTitle = "Raycaster (FPS: " + std::to_string(fps) + ")";
             SDL_SetWindowTitle(gWindow, windowTitle.c_str());
+
+            if (totalDeltaTime >= 10) quit = true;
         }
     }
 
@@ -384,8 +394,11 @@ int main(int argc, char* args[]) {
     cudaFree(gpuCamera);
 #endif
 
-#if USE_GPU && USE_TEXTURE
+#if USE_GPU && USE_TEXTURE && USE_TEXTURE_OBJECT
     cudaDestroyTextureObject(gpuTexture);
+#endif
+
+#if USE_GPU && USE_TEXTURE
     cudaFree(textureData);
 #endif
 
