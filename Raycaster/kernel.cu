@@ -376,7 +376,9 @@ int main(int argc, char* args[]) {
             std::string windowTitle = "Raycaster (FPS: " + std::to_string(fps) + ")";
             SDL_SetWindowTitle(gWindow, windowTitle.c_str());
 
+#if BENCHMARKING
             if (totalDeltaTime >= 10) quit = true;
+#endif
         }
     }
 

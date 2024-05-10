@@ -28,3 +28,5 @@
 #define BACKGROUND_COLOR 0x000000
 
 #define TEST_MEMORY_LEAKS true
+
+#define BENCHMARKING false
