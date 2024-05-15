@@ -148,6 +148,8 @@ void raycast(Uint32 * pixels, Player * player, const Map * map) {
         double textureY = start >= 0 ? 0.0 : -start;
 #endif
 
+        for (int y = 0; y < realStart; y++) pixels[y * SCREEN_WIDTH + column] = BACKGROUND_COLOR;
+
         for (int y = realStart; y < realEnd; ++y) {
 #if USE_TEXTURE
             int sourceY = (int)(textureY++ * ratio);
@@ -162,6 +164,8 @@ void raycast(Uint32 * pixels, Player * player, const Map * map) {
             pixels[y * SCREEN_WIDTH + column] = 0xFF0000 - hitDirection * 0x330000;
 #endif
         }
+
+        for (int y = realEnd; y < SCREEN_HEIGHT; y++) pixels[y * SCREEN_WIDTH + column] = BACKGROUND_COLOR;
     }
 }
 
@@ -276,6 +280,9 @@ int main(int argc, char* args[]) {
 #endif
 
 #if USE_GPU
+    cudaStream_t stream;
+    cudaStreamCreate(&stream);
+
     cudaMemcpyToSymbol(gpuMap, map, MAP_HEIGHT * MAP_WIDTH * sizeof(int));
 
     Uint32* gpuPixels;
@@ -327,47 +334,55 @@ int main(int argc, char* args[]) {
     cudaCreateTextureObject(&gpuTexture, &resDesc, &texDesc, NULL);
 #endif
 
-    double currentTime = (double)SDL_GetTicks64();
-    double prevTime = currentTime;
+    double currentGPUTime = (double)SDL_GetTicks64();
+    double currentCPUTime = (double)SDL_GetTicks64();
+    double prevGPUTime = currentGPUTime;
+    double prevCPUTime = currentCPUTime;
     bool quit = false;
     while (!quit) {
-        currentTime = (double)SDL_GetTicks64();
-        double delta = (currentTime - prevTime) / 1000.0;
-        totalDeltaTime += delta;
+        currentGPUTime = (double)SDL_GetTicks64();
+        currentCPUTime = (double)SDL_GetTicks64();
+        double GPUDelta = (currentGPUTime - prevGPUTime) / 1000.0;
+        double CPUDelta = (currentCPUTime - prevCPUTime) / 1000.0;
+        totalDeltaTime += GPUDelta;
         numFrames++;
-        prevTime = currentTime;
-        int fps = (int)(1 / delta);
+        prevGPUTime = currentGPUTime;
+        prevCPUTime = currentCPUTime;
+        int fps = (int)(1 / GPUDelta);
 
         if (SDL_LockSurface(gSurface) == 0) {
             Uint32* pixels = (Uint32*)gSurface->pixels;
 
 #if USE_GPU
-            cudaMemset(gpuPixels, BACKGROUND_COLOR, SCREEN_HEIGHT * SCREEN_WIDTH * sizeof(Uint32));
             // Copy the content of the player
-            cudaMemcpy(gpuPlayerDirection, player->direction, sizeof(Direction), cudaMemcpyHostToDevice);
-            cudaMemcpy(gpuPlayerCoordinate, player->coordinate, sizeof(Coordinate), cudaMemcpyHostToDevice);
-            cudaMemcpy(gpuCameraDirection, player->camera->direction, sizeof(Direction), cudaMemcpyHostToDevice);
-#else
-            memset(pixels, BACKGROUND_COLOR, SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(Uint32));
+            cudaMemcpyAsync(gpuPlayerDirection, player->direction, sizeof(Direction), cudaMemcpyHostToDevice, stream);
+            cudaMemcpyAsync(gpuPlayerCoordinate, player->coordinate, sizeof(Coordinate), cudaMemcpyHostToDevice, stream);
+            cudaMemcpyAsync(gpuCameraDirection, player->camera->direction, sizeof(Direction), cudaMemcpyHostToDevice, stream);
 #endif
 
 #if USE_GPU && USE_TEXTURE && USE_TEXTURE_OBJECT
-            raycast << <numBlocks, blockSize >> > (gpuPixels, gpuPlayer, gpuTexture);
+            raycast << <numBlocks, blockSize, 0, stream >> > (gpuPixels, gpuPlayer, gpuTexture);
 #elif USE_GPU && USE_TEXTURE && !USE_TEXTURE_OBJECT
-            raycast << <numBlocks, blockSize >> > (gpuPixels, gpuPlayer, textureData);
+            raycast << <numBlocks, blockSize, 0, stream >> > (gpuPixels, gpuPlayer, textureData);
 #elif USE_GPU && !USE_TEXTURE
-            raycast << <numBlocks, blockSize >> > (gpuPixels, gpuPlayer);
+            raycast << <numBlocks, blockSize, 0, stream >> > (gpuPixels, gpuPlayer);
 #elif !USE_GPU && USE_TEXTURE
             raycast(pixels, player, map, texture);
 #elif !USE_GPU && !USE_TEXTURE
             raycast(pixels, player, map);
 #endif
 
-            quit = handle_keys(delta, player);
-
 #if USE_GPU
-            cudaDeviceSynchronize();
-            cudaMemcpy(pixels, gpuPixels, SCREEN_HEIGHT * SCREEN_WIDTH * sizeof(Uint32), cudaMemcpyDeviceToHost);
+            while (cudaStreamQuery(stream) != cudaSuccess) {
+#endif
+                quit = handle_keys(CPUDelta, player);
+#if USE_GPU
+                CPUDelta = (currentCPUTime - prevCPUTime) / 1000.0;
+                prevCPUTime = currentCPUTime;
+                currentCPUTime = (double)SDL_GetTicks64();
+            }
+            cudaMemcpyAsync(pixels, gpuPixels, SCREEN_HEIGHT * SCREEN_WIDTH * sizeof(Uint32), cudaMemcpyDeviceToHost, stream);
+            cudaStreamSynchronize(stream);
 #endif
 
             gSurface->pixels = pixels;
@@ -394,6 +409,8 @@ int main(int argc, char* args[]) {
     cudaFree(gpuPlayerCoordinate);
     cudaFree(gpuCameraDirection);
     cudaFree(gpuCamera);
+
+    cudaStreamDestroy(stream);
 #endif
 
 #if USE_GPU && USE_TEXTURE && USE_TEXTURE_OBJECT
